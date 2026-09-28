@@ -1,6 +1,7 @@
 const { chromium } = require('playwright');
 const cheerio = require('cheerio');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 const fs = require('fs');
 
 const SICOP_URL =
@@ -11,98 +12,117 @@ const SICOP_URL =
 
 const STATE_FILE = 'state.json';
 
-function limpiarTexto(texto) {
+function normalizarTexto(texto) {
   return (texto || '')
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function buscarSeccion($, titulo) {
+function extraerContenidoRelevante(html) {
+  const $ = cheerio.load(html);
 
-  const encabezado = $('p.epsubtitle')
-    .filter((i, el) => limpiarTexto($(el).text()).startsWith(titulo))
-    .first();
+  // Quitamos elementos que no aportan al contenido del expediente
+  $('script, style, noscript').remove();
 
-  if (!encabezado.length) {
+  // Eliminamos atributos que pueden cambiar sin que haya un cambio real visible
+  $('*').each((i, el) => {
+    if (el.attribs) {
+      delete el.attribs.style;
+      delete el.attribs.onclick;
+      delete el.attribs.onchange;
+      delete el.attribs.onblur;
+      delete el.attribs.class;
+      delete el.attribs.id;
+    }
+  });
+
+  // Tomamos todo el texto visible de la página
+  const texto = normalizarTexto($('body').text());
+
+  return texto;
+}
+
+function crearHash(texto) {
+  return crypto
+    .createHash('sha256')
+    .update(texto, 'utf8')
+    .digest('hex');
+}
+
+function cargarEstadoAnterior() {
+  if (!fs.existsSync(STATE_FILE)) {
     return null;
   }
 
-  return encabezado.nextAll('table').first();
+  return JSON.parse(
+    fs.readFileSync(STATE_FILE, 'utf8')
+  );
 }
 
-function obtenerEstadoPrincipal($) {
-
-  const tabla = buscarSeccion($, '2.5 Detalle de la solicitud');
-
-  if (!tabla || !tabla.length) {
-    return 'NO ENCONTRADO';
-  }
-
-  let estado = 'NO ENCONTRADO';
-
-  tabla.find('tr').each((i, fila) => {
-
-    const th = limpiarTexto($(fila).find('th').first().text());
-
-    if (th === 'Estado') {
-
-      estado = limpiarTexto(
-        $(fila).find('td').first().text()
-      );
-
-    }
-
-  });
-
-  return estado;
+function guardarEstado(data) {
+  fs.writeFileSync(
+    STATE_FILE,
+    JSON.stringify(data, null, 2)
+  );
 }
 
-function obtenerFilasTabla($, titulo) {
+function calcularDiferencias(anterior, actual) {
+  const anteriorPalabras = anterior.split(' ');
+  const actualPalabras = actual.split(' ');
 
-  const tabla = buscarSeccion($, titulo);
+  let inicio = 0;
 
-  if (!tabla || !tabla.length) {
-    return [];
+  while (
+    inicio < anteriorPalabras.length &&
+    inicio < actualPalabras.length &&
+    anteriorPalabras[inicio] === actualPalabras[inicio]
+  ) {
+    inicio++;
   }
 
-  const filas = [];
+  let finAnterior = anteriorPalabras.length - 1;
+  let finActual = actualPalabras.length - 1;
 
-  tabla.find('tr').each((i, fila) => {
+  while (
+    finAnterior >= inicio &&
+    finActual >= inicio &&
+    anteriorPalabras[finAnterior] === actualPalabras[finActual]
+  ) {
+    finAnterior--;
+    finActual--;
+  }
 
-    const celdas = $(fila).find('td');
+  const desde = Math.max(0, inicio - 30);
+  const hastaAnterior = Math.min(
+    anteriorPalabras.length,
+    finAnterior + 31
+  );
 
-    if (!celdas.length) {
-      return;
-    }
+  const hastaActual = Math.min(
+    actualPalabras.length,
+    finActual + 31
+  );
 
-    const texto = limpiarTexto(
-      celdas.map((j, td) => $(td).text()).get().join(' | ')
-    );
+  const fragmentoAnterior =
+    anteriorPalabras.slice(desde, hastaAnterior).join(' ');
 
-    if (!texto) {
-      return;
-    }
+  const fragmentoActual =
+    actualPalabras.slice(desde, hastaActual).join(' ');
 
-    if (texto.includes('Los datos consultados no existen')) {
-      return;
-    }
-
-    filas.push(texto);
-
-  });
-
-  return filas;
+  return {
+    anterior: fragmentoAnterior,
+    actual: fragmentoActual
+  };
 }
 
 async function enviarCorreo(asunto, cuerpo) {
-
   const usuario = process.env.GMAIL_USER;
   const password = process.env.GMAIL_APP_PASSWORD;
   const destinatario = process.env.ALERT_TO;
 
   if (!usuario || !password || !destinatario) {
-    throw new Error('Faltan las credenciales de correo.');
+    throw new Error('Faltan credenciales de correo.');
   }
 
   const transporter = nodemailer.createTransport({
@@ -121,78 +141,7 @@ async function enviarCorreo(asunto, cuerpo) {
   });
 }
 
-function cargarEstadoAnterior() {
-
-  if (!fs.existsSync(STATE_FILE)) {
-    return null;
-  }
-
-  return JSON.parse(
-    fs.readFileSync(STATE_FILE, 'utf8')
-  );
-}
-
-function guardarEstado(snapshot) {
-
-  fs.writeFileSync(
-    STATE_FILE,
-    JSON.stringify(
-      {
-        snapshot,
-        actualizado: new Date().toISOString()
-      },
-      null,
-      2
-    )
-  );
-}
-
-function sonIguales(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function crearDetalleCambios(anterior, actual) {
-
-  let texto = '';
-
-  if (anterior.estado !== actual.estado) {
-
-    texto +=
-      '\nESTADO PRINCIPAL\n' +
-      'Anterior: ' + anterior.estado + '\n' +
-      'Nuevo: ' + actual.estado + '\n';
-
-  }
-
-  if (!sonIguales(anterior.solicitudesInformacion, actual.solicitudesInformacion)) {
-
-    texto +=
-      '\nSOLICITUDES DE INFORMACIÓN\n' +
-      'Antes:\n' +
-      (anterior.solicitudesInformacion.join('\n') || 'Ninguna') +
-      '\n\nAhora:\n' +
-      (actual.solicitudesInformacion.join('\n') || 'Ninguna') +
-      '\n';
-
-  }
-
-  if (!sonIguales(anterior.oficiosRespuesta, actual.oficiosRespuesta)) {
-
-    texto +=
-      '\nOFICIO DE RESPUESTA\n' +
-      'Antes:\n' +
-      (anterior.oficiosRespuesta.join('\n') || 'Ninguno') +
-      '\n\nAhora:\n' +
-      (actual.oficiosRespuesta.join('\n') || 'Ninguno') +
-      '\n';
-
-  }
-
-  return texto;
-}
-
 async function main() {
-
   console.log('Iniciando revisión SICOP...');
 
   const browser = await chromium.launch({
@@ -210,7 +159,6 @@ async function main() {
   const page = await context.newPage();
 
   try {
-
     await page.goto(SICOP_URL, {
       waitUntil: 'domcontentloaded',
       timeout: 90000
@@ -219,102 +167,69 @@ async function main() {
     await page.waitForTimeout(3000);
 
     const html = await page.content();
-    const textoPagina = await page.locator('body').innerText();
+    const bodyText = await page.locator('body').innerText();
 
     console.log('Tamaño HTML:', html.length);
 
     if (
-      textoPagina.includes('No fue posible acceder a la página solicitada') ||
+      bodyText.includes('No fue posible acceder a la página solicitada') ||
       html.length < 5000
     ) {
-
       throw new Error(
         'SICOP bloqueó o no entregó correctamente la página.'
       );
-
     }
 
-    const $ = cheerio.load(html);
+    const contenidoActual = extraerContenidoRelevante(html);
+    const hashActual = crearHash(contenidoActual);
 
-    const snapshot = {
+    console.log('Hash actual:', hashActual);
+    console.log('Longitud contenido:', contenidoActual.length);
 
-      estado: obtenerEstadoPrincipal($),
-
-      solicitudesInformacion:
-        obtenerFilasTabla(
-          $,
-          '3. Listado de solicitudes de información'
-        ),
-
-      oficiosRespuesta:
-        obtenerFilasTabla(
-          $,
-          '6. Oficio de respuesta'
-        )
-    };
-
-    console.log(
-      'Información actual:',
-      JSON.stringify(snapshot, null, 2)
-    );
-
-    if (snapshot.estado === 'NO ENCONTRADO') {
-
-      throw new Error(
-        'La página cargó pero no fue posible localizar el estado.'
-      );
-
-    }
-
-    const anteriorArchivo = cargarEstadoAnterior();
+    const anterior = cargarEstadoAnterior();
 
     // Primera ejecución
-    if (!anteriorArchivo) {
-
-      guardarEstado(snapshot);
+    if (!anterior) {
+      guardarEstado({
+        hash: hashActual,
+        contenido: contenidoActual,
+        actualizado: new Date().toISOString()
+      });
 
       await enviarCorreo(
         '✅ Monitor SICOP activado',
         `
 El monitor SICOP quedó activado correctamente.
 
-Expediente:
+Procedimiento:
 2025XE-000272-0000400001
 
-Estado inicial:
-${snapshot.estado}
+Número SICOP:
+20250400823
 
-Solicitudes de información detectadas:
-${snapshot.solicitudesInformacion.join('\n') || 'Ninguna'}
+Se guardó el estado inicial completo de la página.
 
-Oficios de respuesta detectados:
-${snapshot.oficiosRespuesta.join('\n') || 'Ninguno'}
-
-El monitor revisará automáticamente el expediente.
+A partir de ahora se notificará cualquier cambio detectado
+en el contenido del expediente.
 
 ${SICOP_URL}
         `
       );
 
       console.log('Estado inicial guardado.');
-
       return;
     }
 
-    const anterior = anteriorArchivo.snapshot;
-
-    if (sonIguales(anterior, snapshot)) {
-
+    if (anterior.hash === hashActual) {
       console.log('Sin cambios.');
-
       return;
     }
 
     console.log('CAMBIO DETECTADO');
 
-    const cambios = crearDetalleCambios(
-      anterior,
-      snapshot
+    const diferencias = calcularDiferencias(
+      anterior.contenido,
+      contenidoActual
     );
 
     await enviarCorreo(
@@ -328,36 +243,44 @@ Procedimiento:
 Número SICOP:
 20250400823
 
-${cambios}
+------------------------------
+ANTES
+------------------------------
 
-Estado actual:
-${snapshot.estado}
+${diferencias.anterior}
 
-Revisar expediente:
-${SICOP_URL}
+------------------------------
+AHORA
+------------------------------
+
+${diferencias.actual}
+
+------------------------------
 
 Fecha de detección:
 ${new Date().toLocaleString('es-CR', {
   timeZone: 'America/Costa_Rica'
 })}
+
+Revisar expediente:
+${SICOP_URL}
       `
     );
 
-    guardarEstado(snapshot);
+    guardarEstado({
+      hash: hashActual,
+      contenido: contenidoActual,
+      actualizado: new Date().toISOString()
+    });
 
-    console.log('Correo enviado y nuevo estado guardado.');
+    console.log('Cambio detectado, correo enviado y estado actualizado.');
 
   } finally {
-
     await browser.close();
-
   }
 }
 
 main().catch(error => {
-
   console.error(error);
-
   process.exit(1);
-
 });
