@@ -1,0 +1,15 @@
+name: Prueba Schedule
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+jobs:
+  prueba:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Confirmar ejecución automática
+        run: |
+          echo "El schedule automático funcionó"
+          date -u
