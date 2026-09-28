@@ -1,0 +1,11 @@
+{
+  "name": "monitor-sicop",
+  "version": "1.0.0",
+  "description": "Monitor automático de expediente SICOP",
+  "main": "monitor.js",
+  "dependencies": {
+    "cheerio": "latest",
+    "nodemailer": "latest",
+    "playwright": "latest"
+  }
+}
