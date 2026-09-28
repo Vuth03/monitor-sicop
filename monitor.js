@@ -277,28 +277,7 @@ ${SICOP_URL}
   }
 }
 
-async function pruebaCorreo() {
-  await enviarCorreo(
-    '✅ Prueba de correo Monitor SICOP',
-    `
-Este es un correo de prueba del Monitor SICOP.
-
-Si recibís este mensaje, significa que el destinatario quedó configurado correctamente dentro del secret ALERT_TO.
-
-Procedimiento:
-2025XE-000272-0000400001
-
-Número SICOP:
-20250400823
-
-Monitor SICOP
-    `
-  );
-
-  console.log('Correo de prueba enviado correctamente.');
-}
-
-pruebaCorreo().catch(error => {
+main().catch(error => {
   console.error(error);
   process.exit(1);
 });
