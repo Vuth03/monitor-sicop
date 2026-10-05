@@ -1,5 +1,7 @@
 {
-  "fallosConsecutivos": 0,
+  "fallosConsecutivos": 1,
   "alertaEnviada": false,
-  "ultimaRecuperacion": "2026-10-05T15:50:44.669Z"
+  "ultimaRecuperacion": "2026-10-05T15:50:44.669Z",
+  "ultimoFallo": "2026-10-05T16:22:25.275Z",
+  "ultimoError": "page.goto: Timeout 90000ms exceeded.\nCall log:\n  - navigating to \"https://www.sicop.go.cr/moduloBid/cgr/Ep_CgrRefrendoDetailExpViewQ.jsp?cartelNo=20250400823&cartelSeq=00&refrendoSeqno=4161\", waiting until \"domcontentloaded\"\n"
 }
