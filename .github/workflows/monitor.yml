@@ -3,9 +3,6 @@ name: Monitor SICOP
 on:
   workflow_dispatch:
 
-  schedule:
-    - cron: '*/5 * * * *'
-
 permissions:
   contents: write
 
@@ -46,12 +43,26 @@ jobs:
       - name: Guardar estado del monitor
         if: always()
         run: |
-          if [ -n "$(git status --porcelain -- state.json health.json)" ]; then
-            git config user.name "Monitor SICOP"
-            git config user.email "actions@github.com"
-            git add state.json health.json
+          git config user.name "Monitor SICOP"
+          git config user.email "actions@github.com"
+
+          if [ -f state.json ]; then
+            git add state.json
+          fi
+
+          if [ -f health.json ]; then
+            git add health.json
+          fi
+
+          if [ -f pending_change.json ]; then
+            git add pending_change.json
+          else
+            git add -u pending_change.json 2>/dev/null || true
+          fi
+
+          if git diff --cached --quiet; then
+            echo "No hay cambios que guardar."
+          else
             git commit -m "Actualizar estado Monitor SICOP [skip ci]"
             git push
-          else
-            echo "No hay cambios que guardar."
           fi
